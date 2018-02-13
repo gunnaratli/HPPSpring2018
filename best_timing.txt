@@ -1,0 +1,3 @@
+7.472
+Intel(R) Core(TM) i5-3317U CPU @ 1.70GHz
+0.25
