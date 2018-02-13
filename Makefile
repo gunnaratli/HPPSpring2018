@@ -1,7 +1,7 @@
 CC = gcc
 INCLUDES=-I/opt/X11/include
-LDFLAGS=-lX11 -lm -lrt
-CFLAGS = -Wall -O3 -funroll-loops
+LDFLAGS=-lX11 -lm -avx
+CFLAGS = -Wall -O3 -ffast-math
 RM = rm -f
 EXECUTABLE = galsim
 
