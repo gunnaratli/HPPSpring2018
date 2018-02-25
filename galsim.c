@@ -27,6 +27,7 @@ struct quad
   double xstart; //the x coordinate of the top left corner
   double ystart; //the y coordinate of the top left corner
   double size; //the width / height of the quadrant
+  double inv_size; //one over the width & height of the quadrant
   double x; //the x position of the centre of mass of this quadrant
   double y; //the y position of the centre of mass of this quadrant
   double m; //the total mass of this quadrant
@@ -61,6 +62,7 @@ void add_to_quadtree(galquad_t** __restrict tree, particle_t* __restrict particl
     (*tree)->xstart = x;
     (*tree)->ystart = y;
     (*tree)->size = size;
+    (*tree)->inv_size = 1/size;
     (*tree)->x = particle->x; //unless another particle is added then the x and y positions are the same as those for the particle
     (*tree)->y = particle->y;
     (*tree)->m = particle->mass; //and the mass is also the same (this quadrant acts as a single particle if that is all that is in it
@@ -175,6 +177,7 @@ double find_theta(const double x, const double y, galquad_t* __restrict t)
 
 //Calculate the forces acting on the given particle resulting from the given (sub)tree of galaxy quadrants
 //and add them to whatever is passed in fx and fy
+//NOTE theta_max is inverted to avoid a division here
 void force(const double x, const double y, galquad_t* __restrict t, double* __restrict fx, double* __restrict fy, const double theta_max)
 {
   const double epsilon = 1e-3;
@@ -195,18 +198,29 @@ void force(const double x, const double y, galquad_t* __restrict t, double* __re
     factor = t->m/(factor*factor*factor);
     *fx += dx*factor;
     *fy += dy*factor;
+    //printf("Adding force of a single particle to sum: dx=%f, dy=%f, factor=%f, m=%f, fx=%f, fy=%f\n", dx, dy, factor, t->m, *fx, *fy);
     return;
-    //printf("Adding force of a single particle to sum: dx=%f, dy=%f, factor=%f, m=%f, fx=%f, fy=%f\n", dx, dy, factor, t->m, addx, addy);
   }
 
   
   //last case, tree contains one to four sub-trees. For each subtree we need to check whether
   //theta > theta_max (in which case treat as a point mass), or not (in which case recurse).
   //printf("Tree has subtrees. Take them in turn\n");
+
+  //Calculate the amounts to add to the left/top coordinates to get dx / dy for subtrees
+  const double quartsize = t->size * 0.25;
+  const double threequarts = t->size * 0.75;
+  //calculate these once and use them twice in many cases
+  dx = t->xstart - x;
+  dy = t->ystart - y;
+  const double dx2left = (dx + quartsize)*(dx + quartsize);
+  const double dx2right = (dx + threequarts)*(dx + threequarts);
+  const double dy2top = (dy + quartsize)*(dy + quartsize);
+  const double dy2bottom = (dy + threequarts)*(dy + threequarts);
   if(t->topleft != NULL)
   {
     //printf("Adding force of topleft tree to current particle\n");
-    if(find_theta(x, y, t->topleft) > theta_max)
+    if(t->topleft->inv_size * sqrt((dx2left)+(dy2top)) < theta_max)
     {
       force(x, y, t->topleft, fx, fy, theta_max);
     }
@@ -223,7 +237,7 @@ void force(const double x, const double y, galquad_t* __restrict t, double* __re
   if(t->topright != NULL)
   {
     //printf("Adding force of topright tree to current particle\n");
-    if(find_theta(x, y, t->topright) > theta_max)
+    if(t->topright->inv_size * sqrt((dx2right)+(dy2top)) < theta_max)
     {
       force(x, y, t->topright, fx, fy, theta_max);
     }
@@ -240,7 +254,7 @@ void force(const double x, const double y, galquad_t* __restrict t, double* __re
   if(t->bottomleft != NULL)
   {
     //printf("Adding force of bottomleft tree to current particle\n");
-    if(find_theta(x, y, t->bottomleft) > theta_max)
+    if(t->bottomleft->inv_size * sqrt((dx2left)+(dy2bottom)) < theta_max)
     {
       force(x, y, t->bottomleft, fx, fy, theta_max);
     }
@@ -257,7 +271,7 @@ void force(const double x, const double y, galquad_t* __restrict t, double* __re
   if(t->bottomright != NULL)
   {
     //printf("Adding force of bottomright tree to current particle\n");
-    if(find_theta(x, y, t->bottomright) > theta_max)
+    if(t->bottomright->inv_size * sqrt((dx2right)+(dy2bottom)) < theta_max)
     {
       force(x, y, t->bottomright, fx, fy, theta_max);
     }
@@ -271,8 +285,6 @@ void force(const double x, const double y, galquad_t* __restrict t, double* __re
       *fy += dy*factor;
     }
   }
-  //*fx += addx;
-  //*fy += addy;
 }
 
 //Perform one step of the simulation for <N> particles <particles>, depicted by <tree> quad tree, with timestep <dt>
@@ -293,12 +305,10 @@ void sim_step(particle_t* __restrict particles, galquad_t* __restrict tree, cons
   #pragma omp for
     for (i = 0; i < N; i++) 
     {
-     	/*
-      int id = omp_get_thread_num();
-      printf("Hi, this is thread %d reporting, doing i = %d\n", id, i);
-      */
+      //int id = omp_get_thread_num();
+      //printf("Hi, this is thread %d reporting, doing i = %d\n", id, i);
       force(particles[i].x, particles[i].y, tree, &fx, &fy, theta_max);
-      //printf("applying force %f, %f to particle %d\n", fx[i], fy[i], i);
+      //printf("applying force %f, %f to particle %d\n", fx, fy, i);
       ax = fx*Gdt;
       ay = fy*Gdt;
       particles[i].vx += ax;
@@ -463,7 +473,9 @@ int main(int argc, char** argv)
   int graphics;
   if((graphics=atoi(argv[6])))
     initialize_graphics(argv[0], particles, br, N);
-  sim_gal(particles, br, N, atoi(argv[3]), atof(argv[4]), atof(argv[5]), graphics, atoi(argv[7]));
+  double theta_max = atof(argv[5]);
+  theta_max > 0 ? (theta_max = 1/theta_max) : (theta_max = 1e12);
+  sim_gal(particles, br, N, atoi(argv[3]), atof(argv[4]), theta_max, graphics, atoi(argv[7]));
   if(graphics)
     close_graphics();
   int ret = saveoutput(particles, br, N);
